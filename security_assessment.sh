@@ -10,7 +10,6 @@ COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
 REPORT_ROOT="${REPORT_ROOT:-$PWD/security_reports}"
 RUN_DOCKER_BENCH="${RUN_DOCKER_BENCH:-true}"
 RUN_ACTIVE_WEB_SCAN="${RUN_ACTIVE_WEB_SCAN:-false}"
-API_IMPORT_URL="${API_IMPORT_URL:-}"
 
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 REPORT_DIR="$REPORT_ROOT/assessment_$TIMESTAMP"
@@ -41,7 +40,9 @@ section() {
   log "========== $title =========="
 }
 
-check_tool() { command -v "$1" >/dev/null 2>&1; }
+check_tool() {
+  command -v "$1" >/dev/null 2>&1
+}
 
 write_remediation_files() {
   cat >"$REPORT_DIR/remediation/01_sshd_hardening.conf" <<'EOC'
@@ -113,12 +114,21 @@ stage_os_hardening() {
   run_cmd "Fail2Ban status" "$REPORT_DIR/os_fail2ban.txt" bash -lc 'systemctl status fail2ban --no-pager || true'
   run_cmd "SSH daemon config sanity" "$REPORT_DIR/os_sshd_T.txt" bash -lc 'sshd -T 2>/dev/null || true'
   run_cmd "Critical sysctl params" "$REPORT_DIR/os_sysctl_security.txt" bash -lc 'sysctl net.ipv4.ip_forward net.ipv4.conf.all.rp_filter net.ipv4.conf.default.rp_filter net.ipv4.tcp_syncookies kernel.randomize_va_space || true'
-  check_tool lynis && run_cmd "Lynis quick audit" "$REPORT_DIR/os_lynis_quick.txt" lynis audit system --quick || log "lynis not installed: skipping lynis audit"
+
+  if check_tool lynis; then
+    run_cmd "Lynis quick audit" "$REPORT_DIR/os_lynis_quick.txt" lynis audit system --quick
+  else
+    log "lynis not installed: skipping lynis audit"
+  fi
 }
 
 stage_docker_security() {
   section "Stage 2 - Docker security checks"
-  check_tool docker || { log "docker not found: skipping Docker checks"; return; }
+
+  if ! check_tool docker; then
+    log "docker not found: skipping Docker checks"
+    return
+  fi
 
   run_cmd "Docker version" "$REPORT_DIR/docker_version.txt" docker version
   run_cmd "Docker info" "$REPORT_DIR/docker_info.txt" docker info
@@ -127,7 +137,11 @@ stage_docker_security() {
   run_cmd "Docker volumes" "$REPORT_DIR/docker_volumes.txt" docker volume ls
 
   if [[ -f "$COMPOSE_FILE" ]]; then
-    docker compose version >/dev/null 2>&1 && run_cmd "Compose config resolved" "$REPORT_DIR/docker_compose_config.txt" docker compose -f "$COMPOSE_FILE" config
+    if check_tool docker && docker compose version >/dev/null 2>&1; then
+      run_cmd "Compose config resolved" "$REPORT_DIR/docker_compose_config.txt" docker compose -f "$COMPOSE_FILE" config
+    elif check_tool docker-compose; then
+      run_cmd "Compose config resolved" "$REPORT_DIR/docker_compose_config.txt" docker-compose -f "$COMPOSE_FILE" config
+    fi
   else
     log "Compose file not found at $COMPOSE_FILE"
   fi
@@ -135,18 +149,34 @@ stage_docker_security() {
   run_cmd "Container runtime security flags" "$REPORT_DIR/docker_container_security_flags.txt" bash -lc "docker inspect \
     \\$(docker ps -aq) --format '{{.Name}} user={{.Config.User}} privileged={{.HostConfig.Privileged}} readonlyRootfs={{.HostConfig.ReadonlyRootfs}} capDrop={{json .HostConfig.CapDrop}} securityOpt={{json .HostConfig.SecurityOpt}}' 2>/dev/null || true"
 
-  check_tool trivy && run_cmd "Trivy image scan (all local images)" "$REPORT_DIR/docker_trivy_images.txt" bash -lc 'for i in $(docker images --format "{{.Repository}}:{{.Tag}}" | grep -v "<none>"); do echo "===== $i ====="; trivy image --severity HIGH,CRITICAL --quiet "$i" || true; echo; done' || log "trivy not installed: skipping image vuln scan"
+  if check_tool trivy; then
+    run_cmd "Trivy image scan (all local images)" "$REPORT_DIR/docker_trivy_images.txt" bash -lc 'for i in $(docker images --format "{{.Repository}}:{{.Tag}}" | grep -v "<none>"); do echo "===== $i ====="; trivy image --severity HIGH,CRITICAL --quiet "$i" || true; echo; done'
+  else
+    log "trivy not installed: skipping image vuln scan"
+  fi
 
-  [[ "$RUN_DOCKER_BENCH" == "true" ]] && run_cmd "Docker Bench Security" "$REPORT_DIR/docker_bench_security.txt" docker run --net host --pid host --userns host --cap-add audit_control --label docker_bench_security -v /etc:/etc:ro -v /usr/bin/containerd:/usr/bin/containerd:ro -v /usr/bin/runc:/usr/bin/runc:ro -v /usr/lib/systemd:/usr/lib/systemd:ro -v /var/lib:/var/lib:ro -v /var/run/docker.sock:/var/run/docker.sock:ro --rm docker/docker-bench-security
+  if [[ "$RUN_DOCKER_BENCH" == "true" ]]; then
+    run_cmd "Docker Bench Security" "$REPORT_DIR/docker_bench_security.txt" docker run --net host --pid host --userns host --cap-add audit_control --label docker_bench_security \
+      -v /etc:/etc:ro -v /usr/bin/containerd:/usr/bin/containerd:ro -v /usr/bin/runc:/usr/bin/runc:ro -v /usr/lib/systemd:/usr/lib/systemd:ro \
+      -v /var/lib:/var/lib:ro -v /var/run/docker.sock:/var/run/docker.sock:ro --rm docker/docker-bench-security
+  fi
 }
 
 stage_laravel_security() {
   section "Stage 3 - Laravel security checks"
-  [[ -d "$LARAVEL_PATH" ]] || { log "Laravel path not found: $LARAVEL_PATH"; return; }
+
+  if [[ ! -d "$LARAVEL_PATH" ]]; then
+    log "Laravel path not found: $LARAVEL_PATH"
+    return
+  fi
 
   run_cmd "Laravel files overview" "$REPORT_DIR/laravel_files.txt" bash -lc "cd '$LARAVEL_PATH' && pwd && ls -la"
 
-  [[ -f "$LARAVEL_PATH/.env" ]] && run_cmd "Laravel .env key security values" "$REPORT_DIR/laravel_env_security.txt" bash -lc "cd '$LARAVEL_PATH' && awk -F= '/^(APP_ENV|APP_DEBUG|APP_KEY|APP_URL|SESSION_SECURE_COOKIE|SESSION_HTTP_ONLY|SESSION_SAME_SITE|LOG_LEVEL)=/{print \$1\"=\"\$2}' .env" || log ".env not found in $LARAVEL_PATH"
+  if [[ -f "$LARAVEL_PATH/.env" ]]; then
+    run_cmd "Laravel .env key security values" "$REPORT_DIR/laravel_env_security.txt" bash -lc "cd '$LARAVEL_PATH' && awk -F= '/^(APP_ENV|APP_DEBUG|APP_KEY|APP_URL|SESSION_SECURE_COOKIE|SESSION_HTTP_ONLY|SESSION_SAME_SITE|LOG_LEVEL)=/{print \$1\"=\"\$2}' .env"
+  else
+    log ".env not found in $LARAVEL_PATH"
+  fi
 
   if [[ -f "$LARAVEL_PATH/composer.json" ]]; then
     run_cmd "Composer validate" "$REPORT_DIR/laravel_composer_validate.txt" bash -lc "cd '$LARAVEL_PATH' && composer validate --no-check-publish"
@@ -159,33 +189,43 @@ stage_laravel_security() {
   fi
 
   run_cmd "Laravel sensitive file permissions" "$REPORT_DIR/laravel_permissions.txt" bash -lc "cd '$LARAVEL_PATH' && find . -maxdepth 3 -type f \( -name '.env' -o -name '*.key' -o -name '*.pem' \) -exec ls -l {} \;"
-  check_tool semgrep && run_cmd "Semgrep Laravel security rules" "$REPORT_DIR/laravel_semgrep.txt" semgrep --config p/laravel "$LARAVEL_PATH" || log "semgrep not installed: skipping SAST"
+
+  if check_tool semgrep; then
+    run_cmd "Semgrep Laravel security rules" "$REPORT_DIR/laravel_semgrep.txt" semgrep --config p/laravel "$LARAVEL_PATH"
+  else
+    log "semgrep not installed: skipping SAST"
+  fi
 }
 
 stage_webapp_pentest() {
   section "Stage 4 - Webapp pentest checks"
   run_cmd "Basic HTTP headers" "$REPORT_DIR/web_headers_curl.txt" bash -lc "curl -k -I '$TARGET_URL'"
-  check_tool nmap && run_cmd "Nmap service scan (top ports)" "$REPORT_DIR/web_nmap.txt" bash -lc "nmap -sV --top-ports 100 \"\$(echo '$TARGET_URL' | sed -E 's#https?://##; s#/.*##')\"" || log "nmap not installed: skipping nmap"
-  check_tool nikto && run_cmd "Nikto web vulnerability scan" "$REPORT_DIR/web_nikto.txt" nikto -h "$TARGET_URL" || log "nikto not installed: skipping nikto"
-  check_tool nuclei && run_cmd "Nuclei OWASP top10 templates" "$REPORT_DIR/web_nuclei.txt" nuclei -u "$TARGET_URL" -tags owasp,misconfig,cve || log "nuclei not installed: skipping nuclei"
+
+  if check_tool nmap; then
+    run_cmd "Nmap service scan (top ports)" "$REPORT_DIR/web_nmap.txt" bash -lc "nmap -sV --top-ports 100 \"\$(echo '$TARGET_URL' | sed -E 's#https?://##; s#/.*##')\""
+  else
+    log "nmap not installed: skipping nmap"
+  fi
+
+  if check_tool nikto; then
+    run_cmd "Nikto web vulnerability scan" "$REPORT_DIR/web_nikto.txt" nikto -h "$TARGET_URL"
+  else
+    log "nikto not installed: skipping nikto"
+  fi
+
+  if check_tool nuclei; then
+    run_cmd "Nuclei OWASP top10 templates" "$REPORT_DIR/web_nuclei.txt" nuclei -u "$TARGET_URL" -tags owasp,misconfig,cve
+  else
+    log "nuclei not installed: skipping nuclei"
+  fi
 
   if [[ "$RUN_ACTIVE_WEB_SCAN" == "true" ]]; then
-    check_tool docker && run_cmd "OWASP ZAP baseline scan" "$REPORT_DIR/web_zap_baseline.txt" docker run --rm -t owasp/zap2docker-stable zap-baseline.py -t "$TARGET_URL" -r zap_report.html || log "docker unavailable: skipping ZAP baseline"
+    if check_tool docker; then
+      run_cmd "OWASP ZAP baseline scan" "$REPORT_DIR/web_zap_baseline.txt" docker run --rm -t owasp/zap2docker-stable zap-baseline.py -t "$TARGET_URL" -r zap_report.html
+    else
+      log "docker unavailable: skipping ZAP baseline"
+    fi
   fi
-}
-
-import_to_dashboard() {
-  [[ -n "$API_IMPORT_URL" ]] || return 0
-  if ! check_tool curl; then
-    log "curl unavailable: cannot import result to dashboard"
-    return 0
-  fi
-
-  log "Importing report to dashboard API: $API_IMPORT_URL"
-  curl -sS -X POST "$API_IMPORT_URL" \
-    -H 'Content-Type: application/json' \
-    -d "{\"reportDir\":\"$REPORT_DIR\",\"targetUrl\":\"$TARGET_URL\"}" \
-    >"$REPORT_DIR/dashboard_import_response.json" || true
 }
 
 stage_summary() {
@@ -214,8 +254,6 @@ stage_summary() {
 4. Add this script to CI/CD and run routinely (weekly + pre-release).
 EOS
 
-  import_to_dashboard
-  echo "$REPORT_DIR" > "$REPORT_ROOT/latest_report_path.txt"
   log "Assessment completed. Reports at: $REPORT_DIR"
   log "Start reading: $REPORT_DIR/EXEC_SUMMARY.md"
 }

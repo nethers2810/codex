@@ -1,54 +1,41 @@
-# Security Assessment + Web Dashboard (React + Node.js + PostgreSQL)
+# Security Assessment Script (Ubuntu 22.04 + Docker Compose + Laravel)
 
-Ini paket lengkap yang bisa langsung dijalankan untuk:
+Script ini melakukan assessment bertahap sesuai praktik enterprise (OWASP/PTES/CIS baseline):
 
-1. Menjalankan **security assessment** multi-stage (OS, Docker, Laravel, web pentest, remediation).
-2. Menyimpan hasil assessment ke **PostgreSQL**.
-3. Menampilkan hasil assessment terbaru di **dashboard React.js**.
+1. OS hardening check
+2. Docker security check
+3. Laravel security check
+4. Webapp pentest check
+5. Remediation config templates
 
-## Arsitektur
-
-- `security_assessment.sh` → scanner utama
-- `api/` (Node.js + Express) → REST API + importer hasil scan
-- `web/` (React + Vite + Nginx) → dashboard UI
-- `postgres` → database hasil assessment
-- `docker-compose.yml` → orkestrasi semuanya
-
-## Jalankan sekali command (recommended)
+## Cara pakai
 
 ```bash
-chmod +x security_assessment.sh scripts/run_full_stack.sh
-./scripts/run_full_stack.sh
-```
-
-Setelah selesai:
-- Dashboard: http://localhost:3000
-- API latest assessment: http://localhost:8080/api/assessments/latest
-
-## Jalankan manual per tahap
-
-```bash
-# 1) start stack
-docker compose up -d --build
-
-# 2) run assessment + import ke API
-API_IMPORT_URL="http://localhost:8080/api/assessments/import" \
-TARGET_URL="http://127.0.0.1" \
-LARAVEL_PATH="/path/laravel" \
+chmod +x security_assessment.sh
 ./security_assessment.sh
 ```
 
-## Variable penting
+## Contoh dengan parameter
 
-- `TARGET_URL` target aplikasi web
-- `LARAVEL_PATH` path source Laravel
-- `COMPOSE_FILE` lokasi compose file aplikasi Anda
-- `RUN_DOCKER_BENCH` (`true/false`)
-- `RUN_ACTIVE_WEB_SCAN` (`true/false`)
-- `API_IMPORT_URL` endpoint import hasil assessment ke dashboard
+```bash
+TARGET_URL="https://example.com" \
+LARAVEL_PATH="/path/to/laravel" \
+COMPOSE_FILE="/path/to/docker-compose.yml" \
+RUN_DOCKER_BENCH="true" \
+RUN_ACTIVE_WEB_SCAN="false" \
+./security_assessment.sh
+```
+
+## Output
+
+Laporan disimpan di:
+
+- `security_reports/assessment_<timestamp>/`
+- Ringkasan: `EXEC_SUMMARY.md`
+- Template perbaikan: folder `remediation/`
 
 ## Catatan
 
-- Tool opsional (auto-detect): `lynis`, `trivy`, `semgrep`, `nmap`, `nikto`, `nuclei`.
-- Jika tool tidak ada, check akan di-skip dan dicatat di log.
-- Report mentah tetap disimpan di `security_reports/assessment_<timestamp>/`.
+- Tool opsional (jika tersedia): `lynis`, `trivy`, `semgrep`, `nmap`, `nikto`, `nuclei`.
+- Script tetap berjalan walaupun beberapa tool tidak terpasang.
+- Jalankan dengan user yang punya akses Docker bila ingin scan container/image.

@@ -1,0 +1,8 @@
+:root { font-family: Arial, sans-serif; }
+body { margin: 0; background: #0f172a; color: #e2e8f0; }
+.container { max-width: 960px; margin: 0 auto; padding: 24px; }
+.card { background: #1e293b; padding: 16px; border-radius: 8px; margin-bottom: 16px; }
+.error { border: 1px solid #ef4444; color: #fecaca; }
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.metric { font-size: 28px; margin: 0; }
+pre { white-space: pre-wrap; word-break: break-word; }

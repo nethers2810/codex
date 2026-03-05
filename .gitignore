@@ -1,0 +1,4 @@
+security_reports/
+api/node_modules/
+web/node_modules/
+web/dist/

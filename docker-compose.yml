@@ -1,0 +1,39 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: security_dashboard
+      POSTGRES_USER: security
+      POSTGRES_PASSWORD: security123
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+  api:
+    build:
+      context: ./api
+    environment:
+      PORT: 8080
+      DATABASE_URL: postgresql://security:security123@postgres:5432/security_dashboard
+      CORS_ORIGIN: http://localhost:3000
+    depends_on:
+      - postgres
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./security_reports:/app/security_reports
+
+  web:
+    build:
+      context: ./web
+      args:
+        VITE_API_BASE: http://localhost:8080
+    depends_on:
+      - api
+    ports:
+      - "3000:80"
+
+volumes:
+  pgdata:
